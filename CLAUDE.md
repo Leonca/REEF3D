@@ -58,6 +58,12 @@ Timings (measured locally 2026-10-02, 4 cores): Hypre ~1 min (once), DIVEMesh ~0
 REEF3D cold build (empty cache, 1396 `.cpp` files) ~9 min, REEF3D rebuild with warm cache
 ~10 s. Only changed files are recompiled; a change to a widely included header file still
 triggers a near-full rebuild.
+On GitHub (first run, 2026-10-02): Hypre 1 min, DIVEMesh 0.5 min, REEF3D cold 12 min,
+whole job ~14.5 min.
+
+Cache note: a pull-request run can reuse caches from its target branch (`release_candidate`)
+and from `master`, but not from the PR's own side branch. So the first PR build after a
+large change may be slow; once merged, the push build on `release_candidate` refills the cache.
 
 The built binaries are uploaded as a downloadable artifact ("binaries-ubuntu24.04", kept 7 days).
 
