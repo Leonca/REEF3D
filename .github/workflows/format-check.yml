@@ -1,13 +1,23 @@
 name: Format Check
-on: [pull_request, push]
+# Switched to manual start only (2026-10-02, see CLAUDE.md):
+# - .clang-format needs clang-format 22 or newer (Ubuntu's version 18 cannot read it).
+# - With version 22, almost all files in src/ (2125 of 2128) do not match the style yet,
+#   so this check would fail on every push.
+# Start it by hand: Actions tab -> "Format Check" -> "Run workflow".
+on: [workflow_dispatch]
+
+permissions:
+  contents: read
 
 jobs:
   clang-format:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v3
-      - name: Install clang-format
-        run: sudo apt install -y clang-format
+      - uses: actions/checkout@v7
+      - name: Install clang-format 22
+        run: |
+          pipx install clang-format==22.1.8
+          clang-format --version
       - name: Check formatting
         run: |
           find src -name "*.cpp" -o -name "*.h" | \

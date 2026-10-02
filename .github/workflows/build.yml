@@ -1,0 +1,107 @@
+# Tier 1: build DIVEMesh and REEF3D (with MPI) on every push and pull request.
+# Background and rules: see CLAUDE.md.
+name: Build (Tier 1)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: # "Run workflow" button in the GitHub Actions tab
+
+# A newer push to the same branch/PR cancels the older, still running build.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned versions: change these on purpose only (via a reviewed pull request).
+  HYPRE_VERSION: "3.2.0" # same as REEF3D_HYPRE_VERSION in CMakeLists.txt
+  DIVEMESH_COMMIT: "25c8285fee6fb7fe6853a98ade93f1becd374792" # REEF3D/DIVEMesh, 2026-09-27
+  HYPRE_DIR: ${{ github.workspace }}/../hypre
+  CCACHE_DIR: ${{ github.workspace }}/../ccache
+  CCACHE_MAXSIZE: 2G
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out REEF3D
+        uses: actions/checkout@v7
+
+      - name: Check out DIVEMesh (pinned commit)
+        uses: actions/checkout@v7
+        with:
+          repository: REEF3D/DIVEMesh
+          ref: ${{ env.DIVEMESH_COMMIT }}
+          path: DIVEMesh
+
+      # Prebuilt Ubuntu packages: OpenMPI is installed, not compiled.
+      - name: Install OpenMPI and ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libopenmpi-dev openmpi-bin ccache
+
+      # Hypre is compiled only when this cache is empty (about 1 minute), then reused.
+      - name: Restore Hypre from cache
+        id: hypre-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.HYPRE_DIR }}
+          key: hypre-${{ env.HYPRE_VERSION }}-ubuntu24.04-openmpi-v1
+
+      - name: Build Hypre (only if not cached)
+        if: steps.hypre-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet --depth 1 --branch "v${HYPRE_VERSION}" \
+            https://github.com/hypre-space/hypre.git "$RUNNER_TEMP/hypre-src"
+          cd "$RUNNER_TEMP/hypre-src/src"
+          ./configure --prefix="$HYPRE_DIR" --disable-fortran CC=mpicc CXX=mpicxx > /dev/null
+          make -j"$(nproc)" > /dev/null
+          make install > /dev/null
+
+      # Compiler cache: files that did not change are not compiled again.
+      - name: Restore compiler cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-ubuntu24.04-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-ubuntu24.04-${{ github.ref_name }}-
+            ccache-ubuntu24.04-
+
+      - name: Build DIVEMesh
+        working-directory: DIVEMesh
+        run: make -j"$(nproc)" CXX="ccache g++"
+
+      # Target "all" (-O3, no -march=native/LTO) keeps the binary portable and
+      # cache-friendly. GIT_VERSION/GIT_BRANCH are fixed so that the commit hash
+      # does not end up in every compile command (that would defeat ccache).
+      - name: Build REEF3D
+        run: |
+          ccache --zero-stats
+          make all -j"$(nproc)" CXX="ccache mpicxx" HYPRE_DIR="$HYPRE_DIR" \
+            GIT_VERSION=ci GIT_BRANCH=ci
+          ccache --show-stats
+
+      - name: Check binaries
+        run: |
+          ls -l bin/REEF3D DIVEMesh/bin/DiveMESH
+          for exe in bin/REEF3D DIVEMesh/bin/DiveMESH; do
+            if ldd "$exe" | grep "not found"; then
+              echo "::error::$exe is missing shared libraries"
+              exit 1
+            fi
+          done
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: binaries-ubuntu24.04
+          path: |
+            bin/REEF3D
+            DIVEMesh/bin/DiveMESH
+          retention-days: 7
